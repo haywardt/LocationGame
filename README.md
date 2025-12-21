@@ -1,0 +1,2 @@
+# LocationGame
+Location based game
