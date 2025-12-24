@@ -1,0 +1,243 @@
+```html
+<!doctype html>
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<title>Course Chase</title>
+	<style>
+		body { font-family: monospace; margin: 20px; background: #111; color: #0f0; }
+		#game { display: flex; gap: 30px; align-items: flex-start; }
+		#radar { width: 300px; height: 300px; border: 2px solid #0f0; border-radius: 50%; position: relative; background: rgba(0,255,0,0.02); }
+		#info { flex: 1; }
+		.blip { position: absolute; width: 12px; height: 12px; background: #f00; border-radius: 50%; transform: translate(-50%, -50%); border: 2px solid #000; }
+		.hare { background: #ff0 !important; }
+		.me { background: #0f0 !important; }
+		.compass { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); color: #0f0; font-weight: bold; }
+		.controls { margin-top: 20px; }
+		button { background: #222; color: #0f0; border: 1px solid #0f0; padding: 8px 10px; margin: 4px; cursor: pointer; }
+		button:hover { background: #0a0; color: #000; }
+		.log { border: 1px solid #333; padding: 10px; height: 200px; overflow-y: auto; margin-top: 20px; font-size: 12px; color: #afa; }
+	</style>
+</head>
+<body>
+	<h1>🎯 Course Chase</h1>
+	<div id="game">
+		<div id="radar">
+			<div class="compass">N</div>
+		</div>
+		<div id="info">
+			<h3>Player: <span id="pid">...</span></h3>
+			<p>Role: <span id="role">HOUND</span></p>
+			<p>Position: <span id="pos">0, 0</span></p>
+			<p>Course: <span id="course">0°</span></p>
+			<p>Turn: <span id="turn">0</span></p>
+			<p>Survived: <span id="survived">0</span> turns as Hare</p>
+			<div class="controls">
+				<button id="geoBtn">Enable Geolocation</button>
+				<button onclick="simulateGPS(0)">Face North</button>
+				<button onclick="simulateGPS(90)">Face East</button>
+				<button onclick="simulateGPS(180)">Face South</button>
+				<button onclick="simulateGPS(270)">Face West</button>
+				<button id="joinBtn">Join Game</button>
+				<button onclick="resetGame()">Reset</button>
+			</div>
+		</div>
+	</div>
+	<div class="log" id="log"></div>
+
+	<script>
+		// Simple single-file location-like game using localStorage sync.
+		const PLAYER_ID = 'player_' + Math.random().toString(36).slice(2, 11);
+		const GRID_SIZE = 20;
+		const CAPTURE_DIST = 1; // distance in grid units
+		const TURN_TIME = 3000; // ms per turn (short for demo)
+
+		let gameState = { turn: 0, updated: 0, players: [] };
+		let myState = { id: PLAYER_ID, x: Math.random()*GRID_SIZE, y: Math.random()*GRID_SIZE, course: 0, role: 'hound', updated: Date.now()/1000 };
+		let turnsAsHare = 0;
+
+		const pidEl = document.getElementById('pid');
+		const roleEl = document.getElementById('role');
+		const posEl = document.getElementById('pos');
+		const courseEl = document.getElementById('course');
+		const turnEl = document.getElementById('turn');
+		const survivedEl = document.getElementById('survived');
+		const radar = document.getElementById('radar');
+		const logEl = document.getElementById('log');
+		const joinBtn = document.getElementById('joinBtn');
+
+		pidEl.textContent = myState.id;
+
+		function log(s){ const p = document.createElement('div'); p.textContent = s; logEl.prepend(p); }
+
+		// localStorage key used to share game state for demo
+		const STORAGE_KEY = 'course_chase_state_v1';
+
+		function saveState(){
+			gameState.updated = Date.now()/1000;
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(gameState));
+		}
+
+		function loadState(){
+			const raw = localStorage.getItem(STORAGE_KEY);
+			if (!raw) return false;
+			try{
+				const js = JSON.parse(raw);
+				if (js.updated && js.updated > gameState.updated) {
+					gameState = js;
+					return true;
+				}
+			}catch(e){ }
+			return false;
+		}
+
+		function wrapCoord(v){ return ((v % GRID_SIZE)+GRID_SIZE)%GRID_SIZE; }
+
+		function shortestVector(from,to){
+			let dx = to.x - from.x; let dy = to.y - from.y;
+			if (dx > GRID_SIZE/2) dx -= GRID_SIZE;
+			if (dx < -GRID_SIZE/2) dx += GRID_SIZE;
+			if (dy > GRID_SIZE/2) dy -= GRID_SIZE;
+			if (dy < -GRID_SIZE/2) dy += GRID_SIZE;
+			return {dx,dy};
+		}
+
+		function distance(a,b){ const v = shortestVector(a,b); return Math.sqrt(v.dx*v.dx + v.dy*v.dy); }
+
+		function movePlayer(p){ const rad = p.course * Math.PI/180; p.x = wrapCoord(p.x + Math.sin(rad)); p.y = wrapCoord(p.y + Math.cos(rad)); }
+
+		function checkCaptures(){
+			const hare = gameState.players.find(p=>p.role==='hare');
+			if (!hare) return null;
+			for(const h of gameState.players){ if (h.role==='hound' && distance(h,hare)<=CAPTURE_DIST) return h; }
+			return null;
+		}
+
+		function updateGameLogic(){
+			gameState.players.forEach(movePlayer);
+			const captor = checkCaptures();
+			if (captor){
+				captor.role = 'hare';
+				const old = gameState.players.find(p=>p.id!==captor.id && p.role==='hare');
+				if (old) old.role = 'hound';
+				log(`🎯 CAPTURE! ${captor.id.slice(0,8)} is now the Hare`);
+			}
+			gameState.turn++;
+			gameState.updated = Date.now()/1000;
+			saveState();
+		}
+
+		function render(){
+			// UI
+			const me = gameState.players.find(p=>p.id===myState.id) || myState;
+			roleEl.textContent = me.role.toUpperCase();
+			posEl.textContent = `${me.x.toFixed(2)}, ${me.y.toFixed(2)}`;
+			courseEl.textContent = `${Math.round(me.course)}°`;
+			turnEl.textContent = gameState.turn;
+			survivedEl.textContent = turnsAsHare;
+
+			// radar
+			radar.querySelectorAll('.blip').forEach(n=>n.remove());
+			gameState.players.forEach(p=>{
+				const el = document.createElement('div'); el.className = 'blip';
+				if (p.role==='hare') el.classList.add('hare');
+				if (p.id===myState.id) el.classList.add('me');
+				// convert grid to radar coords (center = GRID_SIZE/2)
+				const cx = (p.x / GRID_SIZE) * 100; const cy = (p.y / GRID_SIZE) * 100;
+				el.style.left = cx + '%'; el.style.top = cy + '%';
+				el.title = `${p.id.slice(0,8)} ${p.role}`;
+				radar.appendChild(el);
+			});
+		}
+
+		function joinGame(){
+			// load latest state
+			loadState();
+			// ensure at least one hare
+			if (!gameState.players || !Array.isArray(gameState.players)) gameState.players = [];
+			if (!gameState.players.find(p=>p.role==='hare')){
+				myState.role = 'hare';
+			}
+			// add me (or update)
+			const existing = gameState.players.find(p=>p.id===myState.id);
+			if (existing) Object.assign(existing,myState);
+			else gameState.players.push(Object.assign({},myState));
+			gameState.updated = Date.now()/1000;
+			saveState();
+			log('Joined game as ' + myState.id.slice(0,8));
+			joinBtn.disabled = true;
+		}
+
+		function resetGame(){
+			gameState = { turn: 0, updated: Date.now()/1000, players: [] };
+			myState = { id: PLAYER_ID, x: Math.random()*GRID_SIZE, y: Math.random()*GRID_SIZE, course: 0, role: 'hound', updated: Date.now()/1000 };
+			turnsAsHare = 0;
+			saveState();
+			log('Game reset');
+			joinBtn.disabled = false;
+			render();
+		}
+
+		// local update from storage changes (other windows)
+		window.addEventListener('storage', (ev)=>{ if (ev.key===STORAGE_KEY) { loadState(); render(); } });
+
+		// periodic tick
+		setInterval(()=>{
+			// sync from storage first
+			loadState();
+			// update myState timestamp and push to players list
+			myState.updated = Date.now()/1000;
+			const idx = gameState.players.findIndex(p=>p.id===myState.id);
+			if (idx>=0) gameState.players[idx] = Object.assign({}, myState);
+			// update roles count
+			const me = gameState.players.find(p=>p.id===myState.id);
+			if (me && me.role==='hare') turnsAsHare++;
+			// run game logic each TURN_TIME
+			const now = Date.now();
+			if (!window._lastTick) window._lastTick = now;
+			if (now - window._lastTick >= TURN_TIME){ updateGameLogic(); window._lastTick = now; }
+			saveState(); render();
+		}, 1000);
+
+		// simple simulation controls
+		function simulateGPS(deg){ myState.course = deg; log('Course set to ' + deg + '°'); render(); }
+
+		// Geolocation support (course only, for demo)
+		const geoBtn = document.getElementById('geoBtn');
+		let watchId = null;
+		geoBtn.addEventListener('click', ()=>{
+			if (!navigator.geolocation) { alert('Geolocation not supported'); return; }
+			if (watchId===null){
+				watchId = navigator.geolocation.watchPosition(p=>{
+					// if heading available, use it, otherwise derive from movement
+					const coords = p.coords; if (coords.heading !== null) myState.course = coords.heading; 
+					// map lat/lon roughly into grid for demo (not accurate)
+					myState.x = wrapCoord((coords.longitude % 1 + 1) * GRID_SIZE);
+					myState.y = wrapCoord((coords.latitude % 1 + 1) * GRID_SIZE);
+					render();
+				}, err=>{ log('Geolocation error: ' + err.message); }, { enableHighAccuracy: true });
+				geoBtn.textContent = 'Disable Geolocation';
+			} else {
+				navigator.geolocation.clearWatch(watchId); watchId = null; geoBtn.textContent = 'Enable Geolocation';
+			}
+		});
+
+		// initial load
+		(function init(){
+			const raw = localStorage.getItem(STORAGE_KEY);
+			if (raw){ try{ gameState = JSON.parse(raw); }catch(e){ gameState = {turn:0,updated:Date.now()/1000,players:[]}; } }
+			// ensure myState present in players array for local rendering until join
+			const idx = gameState.players.findIndex(p=>p.id===myState.id);
+			if (idx===-1) gameState.players.push(Object.assign({}, myState));
+			render();
+		})();
+
+		// expose for buttons
+		window.simulateGPS = simulateGPS;
+		window.joinGame = joinGame;
+		window.resetGame = resetGame;
+
+	</script>
+</body>
+</html>
