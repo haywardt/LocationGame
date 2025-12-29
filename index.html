@@ -1,40 +1,261 @@
-```html
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width,initial-scale=1">
-	<title>Course Chase</title>
-	<style>
-		body { font-family: monospace; margin: 20px; background: #111; color: #0f0; }
-		#game { display: flex; gap: 30px; align-items: flex-start; }
-		#radar { width: 300px; height: 300px; border: 2px solid #0f0; border-radius: 50%; position: relative; background: rgba(0,255,0,0.02); }
-		#info { flex: 1; }
-		.blip { position: absolute; width: 12px; height: 12px; background: #f00; border-radius: 50%; transform: translate(-50%, -50%); border: 2px solid #000; }
-		.hare { background: #ff0 !important; }
-		.me { background: #0f0 !important; }
-		.compass { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); color: #0f0; font-weight: bold; }
-		.controls { margin-top: 20px; }
-		button { background: #222; color: #0f0; border: 1px solid #0f0; padding: 8px 10px; margin: 4px; cursor: pointer; }
-		button:hover { background: #0a0; color: #000; }
-		.log { border: 1px solid #333; padding: 10px; height: 200px; overflow-y: auto; margin-top: 20px; font-size: 12px; color: #afa; }
-	</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G Chase: GPS Tag</title>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-functions.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { 
+            font-family: sans-serif; 
+            text-align: center; 
+            background: #111; 
+            color: white; 
+            margin: 0; 
+            padding: 10px; 
+            overflow-x: hidden; 
+        }
+        #radar { 
+            position: relative; 
+            width: 320px; 
+            height: 320px; 
+            background: #222; 
+            border-radius: 50%; 
+            margin: 10px auto; 
+            border: 3px solid #0a0; 
+        }
+        .player { 
+            position: absolute; 
+            transform: translate(-50%, -50%); 
+            font-size: 20px; 
+            filter: drop-shadow(0 0 2px black); 
+        }
+        #me { 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform: translate(-50%, -50%); 
+            color: #0f0; 
+            font-size: 28px; 
+            z-index: 100; 
+        }
+        .controls { 
+            margin: 15px; 
+            display: flex; 
+            flex-wrap: wrap; 
+            justify-content: center; 
+            gap: 10px; 
+        }
+        button { 
+            padding: 12px 20px; 
+            border: none; 
+            border-radius: 6px; 
+            background: #333; 
+            color: white; 
+            font-size: 16px; 
+            cursor: pointer; 
+            min-width: 120px; 
+        }
+        .heading-btn { 
+            background: #444; 
+            font-size: 20px; 
+            width: 60px; 
+            min-width: unset; 
+        }
+        #status { 
+            margin: 10px; 
+            padding: 10px; 
+            border-radius: 6px; 
+            background: #333; 
+            min-height: 20px; 
+        }
+        .hare { color: gold !important; }
+        .hound { color: red !important; }
+    </style>
 </head>
 <body>
-	<h1>🎯 Course Chase</h1>
-	<div id="game">
-		<div id="radar">
-			<div class="compass">N</div>
-		</div>
-		<div id="info">
-			<h3>Player: <span id="pid">...</span></h3>
-			<p>Role: <span id="role">HOUND</span></p>
-			<p>Position: <span id="pos">0, 0</span></p>
-			<p>Course: <span id="course">0°</span></p>
-			<p>Turn: <span id="turn">0</span></p>
-			<p>Survived: <span id="survived">0</span> turns as Hare</p>
-			<div class="controls">
-				<button id="geoBtn">Enable Geolocation</button>
+    <h1>🔄 G Chase: GPS Tag</h1>
+    <div id="status">Initializing...</div>
+    <div id="radar">
+        <!-- Current player (center) -->
+        <div id="me"><i class="fas fa-location-arrow"></i></div>
+        <!-- Other players rendered here -->
+    </div>
+    <div class="controls">
+        <button id="leftBtn" class="heading-btn" title="Turn -30°"><i class="fas fa-undo"></i></button>
+        <button id="modeBtn">GPS: OFF</button>
+        <button id="rightBtn" class="heading-btn" title="Turn +30°"><i class="fas fa-redo"></i></button>
+        <button id="speechBtn">🔇 Speech OFF</button>
+    </div>
+    <script>
+        // === Configuration ===
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_PROJECT.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            appId: "YOUR_APP_ID"
+        };
+        firebase.initializeApp(firebaseConfig);
+        const functions = firebase.functions();
+
+        // === Game State ===
+        let myId = localStorage.getItem('playerId') || 'p_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('playerId', myId);
+        let myHeading = 0; // North = 0 degrees
+        let myRole = 'hound';
+        let useRealGPS = false;
+        let speechEnabled = false;
+        let gpsWatchId = null;
+        let simulationInterval = null;
+        let lastSpeechTime = 0;
+        let lastPlayers = [];
+
+        // === DOM Elements ===
+        const statusEl = document.getElementById('status');
+        const radarEl = document.getElementById('radar');
+        const leftBtn = document.getElementById('leftBtn');
+        const rightBtn = document.getElementById('rightBtn');
+        const modeBtn = document.getElementById('modeBtn');
+        const speechBtn = document.getElementById('speechBtn');
+
+        // === Initialize ===
+        updateStatus();
+        startSimulatedHeading();
+        startGameLoop();
+
+        // === Event Listeners ===
+        leftBtn.addEventListener('click', () => { myHeading -= 30; updateStatus(); });
+        rightBtn.addEventListener('click', () => { myHeading += 30; updateStatus(); });
+        modeBtn.addEventListener('click', toggleGPSMode);
+        speechBtn.addEventListener('click', toggleSpeech);
+
+        // === Core Functions ===
+        function updateStatus() {
+            myHeading = (myHeading + 360) % 360;
+            statusEl.innerHTML = `ID: <b>${myId}</b> | Role: <b class="${myRole}">${myRole.toUpperCase()}</b> | Heading: <b>${Math.round(myHeading)}°</b>`;
+            document.getElementById('me').style.transform = `translate(-50%, -50%) rotate(${myHeading}deg)`;
+        }
+
+        function toggleGPSMode() {
+            useRealGPS = !useRealGPS;
+            modeBtn.textContent = `GPS: ${useRealGPS ? 'ON' : 'OFF'}`;
+            
+            if (simulationInterval) {
+                clearInterval(simulationInterval);
+                simulationInterval = null;
+            }
+            if (gpsWatchId) {
+                navigator.geolocation.clearWatch(gpsWatchId);
+                gpsWatchId = null;
+            }
+            
+            if (useRealGPS) {
+                if (!navigator.geolocation) {
+                    alert("Geolocation not supported!");
+                    useRealGPS = false;
+                    modeBtn.textContent = `GPS: OFF`;
+                    startSimulatedHeading();
+                    return;
+                }
+                gpsWatchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        if (pos.coords.heading !== null && !isNaN(pos.coords.heading)) {
+                            myHeading = pos.coords.heading;
+                            updateStatus();
+                        }
+                    },
+                    (err) => {
+                        console.error("GPS Error:", err);
+                        startSimulatedHeading();
+                    },
+                    { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+                );
+            } else {
+                startSimulatedHeading();
+            }
+        }
+
+        function startSimulatedHeading() {
+            simulationInterval = setInterval(() => {
+                myHeading += (Math.random() - 0.5) * 5;
+                updateStatus();
+            }, 2000);
+        }
+
+        function toggleSpeech() {
+            speechEnabled = !speechEnabled;
+            speechBtn.textContent = speechEnabled ? '🔊 Speech ON' : '🔇 Speech OFF';
+            if (speechEnabled) {
+                lastSpeechTime = 0;
+                generateSpeech(lastPlayers);
+            }
+        }
+
+        function startGameLoop() {
+            setInterval(gameLoop, 1000);
+        }
+
+        async function gameLoop() {
+            try {
+                const updateGame = functions.httpsCallable('updateGame');
+                const result = await updateGame({ 
+                    playerId: myId, 
+                    heading: myHeading 
+                });
+                
+                const data = result.data;
+                myRole = data.myRole;
+                lastPlayers = data.players;
+                updateStatus();
+                renderRadar(data.players);
+                
+                if (speechEnabled && Date.now() - lastSpeechTime > 15000) {
+                    generateSpeech(data.players);
+                    lastSpeechTime = Date.now();
+                }
+            } catch (error) {
+                console.error('Game loop error:', error);
+                statusEl.innerHTML += '<br>Connection error';
+            }
+        }
+
+        function renderRadar(players) {
+            radarEl.querySelectorAll('.player:not(#me)').forEach(el => el.remove());
+            const radarSize = 320;
+            const scale = 8;
+            
+            players.forEach(p => {
+                const x = (p.dx * scale) + radarSize/2;
+                const y = (-p.dy * scale) + radarSize/2;
+                
+                const playerEl = document.createElement('div');
+                playerEl.className = `player ${p.role}`;
+                playerEl.style.left = `${x}px`;
+                playerEl.style.top = `${y}px`;
+                playerEl.innerHTML = `<i class="fas fa-location-arrow" style="transform: rotate(${p.heading}deg)"></i>`;
+                radarEl.appendChild(playerEl);
+            });
+        }
+
+        function generateSpeech(players) {
+            if (players.length === 0) return;
+            let speechText = `You are the ${myRole}. `;
+            players.forEach(p => {
+                const dist = Math.sqrt(p.dx*p.dx + p.dy*p.dy).toFixed(1);
+                const bearing = (Math.atan2(p.dy, p.dx) * 180 / Math.PI + 450) % 360;
+                const clock = Math.round(bearing / 30) || 12;
+                speechText += `${p.role} at ${dist} units, ${clock} o'clock. `;
+            });
+            
+            const utterance = new SpeechSynthesisUtterance(speechText);
+            utterance.rate = 1.2;
+            window.speechSynthesis.speak(utterance);
+        }
+    </script>
+</body>
+</html>				<button id="geoBtn">Enable Geolocation</button>
 				<button onclick="simulateGPS(0)">Face North</button>
 				<button onclick="simulateGPS(90)">Face East</button>
 				<button onclick="simulateGPS(180)">Face South</button>
