@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title></title>
+    <style>
+        body {
+            margin: 0;
+            background: black;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: monospace;
+        }
+        #course {
+            font-size: 100px;
+            color: lime;
+        }
+        #startBtn {
+            font-size: 50px;
+            color: lime;
+            background: black;
+            border: 2px solid lime;
+            padding: 20px 40px;
+            cursor: pointer;
+            font-family: monospace;
+        }
+        #startBtn:hover {
+            background: lime;
+            color: black;
+        }
+    </style>
+</head>
+<body>
+    <div id="course">---</div>
+    <button id="startBtn">Start Game</button>
+
+    <script>
+        const size = 20;
+        const player = {x: 0, y: 0, heading: 0};
+        const treasure = {x: 0, y: 0};
+        const bandits = [];
+        const detectionRange = 5;
+        let speech = window.speechSynthesis;
+        let gameInterval;
+
+        function randomPos() {
+            return Math.random() * size;
+        }
+        function randomCourse() {
+            return Math.random() * 360;
+        }
+
+        function init() {
+            player.x = randomPos();
+            player.y = randomPos();
+            treasure.x = randomPos();
+            treasure.y = randomPos();
+            
+            for (let i = 0; i < 2; i++) {
+                bandits.push({
+                    x: randomPos(),
+                    y: randomPos(),
+                    course: randomCourse()
+                });
+            }
+            
+            updateDisplay();
+        }
+
+        function degreesToClock(deg) {
+            const adjusted = (deg - 15 + 360) % 360;
+            const hour = Math.round(adjusted / 30) % 12;
+            return hour === 0 ? 12 : hour;
+        }
+
+        function getRelativeDirection(fromX, fromY, toX, toY, playerHeading) {
+            let angle = Math.atan2(toY - fromY, toX - fromX) * 180 / Math.PI;
+            angle = (angle - playerHeading + 360) % 360;
+            return degreesToClock(angle);
+        }
+
+        function toroidalDistance(x1, y1, x2, y2) {
+            let dx = Math.abs(x2 - x1);
+            let dy = Math.abs(y2 - y1);
+            dx = Math.min(dx, size - dx);
+            dy = Math.min(dy, size - dy);
+            return Math.sqrt(dx*dx + dy*dy);
+        }
+
+        function movePoint(x, y, course, distance) {
+            const rad = course * Math.PI / 180;
+            let nx = x + Math.cos(rad) * distance;
+            let ny = y + Math.sin(rad) * distance;
+            
+            nx = (nx + size) % size;
+            ny = (ny + size) % size;
+            
+            return {x: nx, y: ny};
+        }
+
+        function speak(text) {
+            if (speech.speaking) speech.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 1.2;
+            speech.speak(utterance);
+        }
+
+        function updateDisplay() {
+            document.getElementById('course').textContent = 
+                Math.round(player.heading).toString().padStart(3, '0') + '°';
+        }
+
+        function gameLoop() {
+            const moved = movePoint(player.x, player.y, player.heading, 1);
+            player.x = moved.x;
+            player.y = moved.y;
+            
+            const distToTreasure = toroidalDistance(player.x, player.y, treasure.x, treasure.y);
+            if (distToTreasure < 1) {
+                speak("Target acquired");
+                treasure.x = randomPos();
+                treasure.y = randomPos();
+            } else {
+                const clock = getRelativeDirection(player.x, player.y, treasure.x, treasure.y, player.heading);
+                const clicks = Math.round(distToTreasure);
+                speak(`treasure at ${clock} o'clock ${clicks} clicks`);
+            }
+            
+            let banditWarning = false;
+            bandits.forEach(bandit => {
+                const distToPlayer = toroidalDistance(bandit.x, bandit.y, player.x, player.y);
+                
+                if (distToPlayer <= detectionRange) {
+                    const angle = Math.atan2(player.y - bandit.y, player.x - bandit.x) * 180 / Math.PI;
+                    bandit.course = angle;
+                    banditWarning = true;
+                }
+                
+                const movedBandit = movePoint(bandit.x, bandit.y, bandit.course, 1);
+                bandit.x = movedBandit.x;
+                bandit.y = movedBandit.y;
+            });
+            
+            if (banditWarning) {
+                const closestBandit = bandits.reduce((closest, bandit) => {
+                    const dist = toroidalDistance(player.x, player.y, bandit.x, bandit.y);
+                    return dist < closest.dist ? {dist, bandit} : closest;
+                }, {dist: Infinity, bandit: null});
+                
+                if (closestBandit.dist <= detectionRange) {
+                    const clock = getRelativeDirection(
+                        player.x, player.y, 
+                        closestBandit.bandit.x, closestBandit.bandit.y, 
+                        player.heading
+                    );
+                    const clicks = Math.round(closestBandit.dist);
+                    speak(`bandit ${clock} o'clock ${clicks} clicks`);
+                }
+            }
+            
+            updateDisplay();
+        }
+
+        // Start button handler
+        document.getElementById('startBtn').addEventListener('click', function() {
+            document.getElementById('startBtn').style.display = 'none';
+            speak("Game started");
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(
+                    (position) => {
+                        if (position.coords.course !== null) {
+                            player.heading = position.coords.course;
+                            updateDisplay();
+                        }
+                    },
+                    (error) => {
+                        document.getElementById('course').textContent = 'ERR';
+                    },
+                    {enableHighAccuracy: true}
+                );
+            }
+            gameInterval = setInterval(gameLoop, 15000);
+        });
+
+        init();
+    </script>
+</body>
+</html>
