@@ -1,4 +1,4 @@
-```markdown
+
 # GPS Course Navigator
 
 A real-time navigation game that uses your **GPS course over ground** (`position.coords.course`) as the control mechanism. You must physically walk to move through the game world. Find treasure, avoid bandits, and explore using only your direction of travel and audio cues.
